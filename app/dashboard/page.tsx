@@ -1,60 +1,114 @@
+// app/dashboard/page.tsx
 "use client"
 
 import { useState, useEffect } from "react"
-import { Activity, Battery, Lightbulb, Power, Wifi } from "lucide-react"
+import { Activity, Battery, Lightbulb, Power, Wifi } from 'lucide-react'
 import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Bar, BarChart, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-
-// Mock data for light sensor readings
-const generateLightData = () => {
-  return Array.from({ length: 24 }, (_, i) => ({
-    hour: i,
-    value: Math.floor(Math.random() * 100) + 20,
-  }))
-}
-
-// Mock data for energy usage
-const generateEnergyData = () => {
-  return Array.from({ length: 7 }, (_, i) => ({
-    day: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i],
-    usage: Math.floor(Math.random() * 50) + 10,
-  }))
-}
+import { 
+  fetchLampStatus, 
+  toggleLamp, 
+  setBrightness, 
+  fetchSensorData,
+  type LightDataPoint,
+  type EnergyDataPoint
+} from "@/lib/api"
 
 export default function Dashboard() {
-  const [isOn, setIsOn] = useState(true)
-  const [lightData, setLightData] = useState(generateLightData())
-  const [energyData, setEnergyData] = useState(generateEnergyData())
-  const [batteryLevel, setBatteryLevel] = useState(87)
-  const [wifiStrength, setWifiStrength] = useState(92)
+  const [isOn, setIsOn] = useState(false)
+  const [lightData, setLightData] = useState<LightDataPoint[]>([])
+  const [energyData, setEnergyData] = useState<EnergyDataPoint[]>([])
+  const [batteryLevel, setBatteryLevel] = useState(0)
+  const [wifiStrength, setWifiStrength] = useState(0)
+  const [isLoading, setIsLoading] = useState(true)
 
-  // Simulate real-time data updates
+  // Fetch initial data
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Update light sensor data with a new reading
-      setLightData((prev) => {
-        const newData = [...prev]
-        const lastHour = newData[newData.length - 1].hour
-        const newValue = Math.floor(Math.random() * 100) + 20
-
-        // Replace the oldest data point
-        newData.shift()
-        newData.push({ hour: (lastHour + 1) % 24, value: newValue })
-
-        return newData
-      })
-    }, 10000)
-
+    async function fetchInitialData() {
+      try {
+        setIsLoading(true)
+        
+        // Fetch lamp status
+        const statusData = await fetchLampStatus()
+        setIsOn(statusData.isOn)
+        setBatteryLevel(statusData.batteryLevel || 0)
+        setWifiStrength(statusData.wifiStrength || 0)
+        
+        // Fetch sensor data
+        const sensorData = await fetchSensorData()
+        if (sensorData.lightReadings) {
+          setLightData(sensorData.lightReadings)
+        }
+        if (sensorData.energyUsage) {
+          setEnergyData(sensorData.energyUsage)
+        }
+      } catch (error) {
+        console.error("Error fetching data:", error)
+        toast.error("Failed to fetch device data")
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    
+    fetchInitialData()
+    
+    // Set up polling for real-time updates
+    const interval = setInterval(async () => {
+      try {
+        const statusData = await fetchLampStatus()
+        setIsOn(statusData.isOn)
+        setBatteryLevel(statusData.batteryLevel || batteryLevel)
+        setWifiStrength(statusData.wifiStrength || wifiStrength)
+        
+        const sensorData = await fetchSensorData()
+        if (sensorData.lightReadings) {
+          setLightData(sensorData.lightReadings)
+        }
+      } catch (error) {
+        console.error("Error polling device data:", error)
+      }
+    }, 10000) // Poll every 10 seconds
+    
     return () => clearInterval(interval)
-  }, [])
+  }, [batteryLevel, wifiStrength])
 
-  const togglePower = () => {
-    setIsOn(!isOn)
-    toast.success(`Lamp turned ${!isOn ? "on" : "off"}`)
+  const handleTogglePower = async () => {
+    try {
+      setIsLoading(true)
+      await toggleLamp(!isOn)
+      setIsOn(!isOn)
+      toast.success(`Lamp turned ${!isOn ? "on" : "off"}`)
+    } catch (error) {
+      toast.error("Failed to toggle lamp")
+      console.error(error)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleSetBrightness = async (value: number) => {
+    try {
+      await setBrightness(value)
+      toast.success(`Brightness set to ${Math.round((value / 255) * 100)}%`)
+    } catch (error) {
+      toast.error("Failed to set brightness")
+      console.error(error)
+    }
+  }
+
+  if (isLoading && lightData.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-[50vh]">
+        <div className="text-center">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p>Loading device data...</p>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -68,7 +122,12 @@ export default function Dashboard() {
           <Badge variant={isOn ? "default" : "outline"} className="h-7 px-3">
             {isOn ? "Online" : "Offline"}
           </Badge>
-          <Button variant={isOn ? "default" : "outline"} size="sm" onClick={togglePower}>
+          <Button 
+            variant={isOn ? "default" : "outline"} 
+            size="sm" 
+            onClick={handleTogglePower}
+            disabled={isLoading}
+          >
             <Power className="mr-2 h-4 w-4" />
             {isOn ? "Turn Off" : "Turn On"}
           </Button>
@@ -124,7 +183,8 @@ export default function Dashboard() {
               <Button
                 variant="outline"
                 className="h-20 flex-col gap-1"
-                onClick={() => toast.success("Brightness set to 100%")}
+                onClick={() => handleSetBrightness(255)}
+                disabled={!isOn || isLoading}
               >
                 <Lightbulb className="h-6 w-6" />
                 <span>Max Brightness</span>
@@ -132,7 +192,8 @@ export default function Dashboard() {
               <Button
                 variant="outline"
                 className="h-20 flex-col gap-1"
-                onClick={() => toast.success("Brightness set to 30%")}
+                onClick={() => handleSetBrightness(77)}
+                disabled={!isOn || isLoading}
               >
                 <Lightbulb className="h-6 w-6" />
                 <span>Dim Light</span>
@@ -141,11 +202,17 @@ export default function Dashboard() {
                 variant="outline"
                 className="h-20 flex-col gap-1"
                 onClick={() => toast.success("Schedule activated")}
+                disabled={!isOn || isLoading}
               >
                 <Activity className="h-6 w-6" />
                 <span>Auto Mode</span>
               </Button>
-              <Button variant="outline" className="h-20 flex-col gap-1" onClick={togglePower}>
+              <Button 
+                variant="outline" 
+                className="h-20 flex-col gap-1" 
+                onClick={handleTogglePower}
+                disabled={isLoading}
+              >
                 <Power className="h-6 w-6" />
                 <span>Toggle</span>
               </Button>
